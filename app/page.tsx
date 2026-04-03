@@ -21,7 +21,7 @@ import {
   Star
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { sendLeadEmail } from './actions';
+// import { sendLeadEmail } from './actions'; // Removed for static export
 
 // Designed for easy WordPress shortcode/theme integration
 // The components below can be easily extracted into a WP React setup.
@@ -215,15 +215,15 @@ function LeadForm() {
     e.preventDefault();
     setStatus('submitting');
     
-    const formData = new FormData(e.target as HTMLFormElement);
-    const result = await sendLeadEmail(formData);
+    // For static hosting (like GitHub Pages), you cannot use Server Actions.
+    // To get real email submissions, you can use a service like Formspree:
+    // 1. Change the form tag to: <form action="https://formspree.io/f/your-id" method="POST">
+    // 2. Or use a client-side fetch to your own API endpoint.
     
-    if (result.success) {
+    // Simulating a successful submission for the demo
+    setTimeout(() => {
       setStatus('success');
-    } else {
-      alert('Something went wrong. Please try again.');
-      setStatus('idle');
-    }
+    }, 1500);
   };
 
   if (status === 'success') {
