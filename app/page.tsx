@@ -18,15 +18,32 @@ import {
   Mic,
   Activity,
   ArrowRight,
-  Star
+  Star,
+  Settings,
+  User,
+  Smile,
+  Type
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 // import { sendLeadEmail } from './actions'; // Removed for static export
-
-// Designed for easy WordPress shortcode/theme integration
-// The components below can be easily extracted into a WP React setup.
-
 import { GoogleGenAI } from "@google/genai";
+
+// --- BOT CONFIGURATION ---
+interface BotSettings {
+  name: string;
+  greeting: string;
+  tone: string;
+  avatarType: 'bot' | 'user' | 'smile';
+  primaryColor: string;
+}
+
+const DEFAULT_SETTINGS: BotSettings = {
+  name: "PlumbBot AI",
+  greeting: "Hi! I'm PlumbBot AI. How can I help you today?",
+  tone: "professional and helpful",
+  avatarType: 'bot',
+  primaryColor: "blue"
+};
 
 // --- KNOWLEDGE BASE ---
 // Paste your business information, FAQs, pricing, and service details here.
@@ -41,23 +58,99 @@ PlumbBot AI is a professional plumbing service based in the UK.
 `;
 
 function ChatbotWidget() {
+  const [settings, setSettings] = useState<BotSettings>(DEFAULT_SETTINGS);
+  const [showSettings, setShowSettings] = useState(false);
   const [messages, setMessages] = useState([
-    { role: 'bot', text: "Hi! I'm PlumbBot AI. How can I help you today?", time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }
+    { role: 'bot', text: DEFAULT_SETTINGS.greeting, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isListening, setIsListening] = useState(false);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+
+  // Load settings from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('plumbbot_settings');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setSettings(parsed);
+        // Update initial message if it hasn't been interacted with
+        setMessages([{ role: 'bot', text: parsed.greeting, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }]);
+      } catch (e) {
+        console.error("Failed to load settings", e);
+      }
+    }
+  }, []);
+
+  const saveSettings = (newSettings: BotSettings) => {
+    setSettings(newSettings);
+    localStorage.setItem('plumbbot_settings', JSON.stringify(newSettings));
+    setShowSettings(false);
+    // Reset conversation to show new greeting
+    setMessages([{ role: 'bot', text: newSettings.greeting, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }]);
+  };
 
   // Initialize Gemini AI
   const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || "" });
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
   };
 
   useEffect(() => {
     scrollToBottom();
   }, [messages, isTyping]);
+
+  // Speech Recognition Setup
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = 'en-GB';
+
+      recognitionRef.current.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInput(prev => prev + (prev ? ' ' : '') + transcript);
+        setIsListening(false);
+      };
+
+      recognitionRef.current.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        setIsListening(false);
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert("Speech recognition is not supported in your browser.");
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop();
+    } else {
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (e) {
+        console.error("Failed to start recognition", e);
+      }
+    }
+  };
 
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -82,7 +175,7 @@ function ChatbotWidget() {
         contents: [...history, { role: 'user', parts: [{ text: userMsg }] }],
         config: {
           systemInstruction: `
-            You are PlumbBot AI, a helpful and professional plumbing assistant.
+            You are ${settings.name}, a ${settings.tone} plumbing assistant.
             Use the following knowledge base to answer questions:
             ${KNOWLEDGE_BASE}
             
@@ -113,26 +206,163 @@ function ChatbotWidget() {
     }
   };
 
+  const AvatarIcon = () => {
+    switch (settings.avatarType) {
+      case 'user': return <User className="w-6 h-6" />;
+      case 'smile': return <Smile className="w-6 h-6" />;
+      default: return <Bot className="w-6 h-6" />;
+    }
+  };
+
+  const colorClasses: Record<string, string> = {
+    blue: "from-blue-700 to-blue-600",
+    indigo: "from-indigo-700 to-indigo-600",
+    slate: "from-slate-800 to-slate-700",
+    emerald: "from-emerald-700 to-emerald-600"
+  };
+  const currentHeaderColor = colorClasses[settings.primaryColor] || colorClasses.blue;
+
+  const buttonColorClasses: Record<string, string> = {
+    blue: "bg-blue-600 hover:bg-blue-700",
+    indigo: "bg-indigo-600 hover:bg-indigo-700",
+    slate: "bg-slate-700 hover:bg-slate-800",
+    emerald: "bg-emerald-600 hover:bg-emerald-700"
+  };
+  const currentButtonColor = buttonColorClasses[settings.primaryColor] || buttonColorClasses.blue;
+
   return (
     <div className="flex flex-col h-[550px] bg-white border border-slate-200/60 rounded-[2rem] shadow-2xl overflow-hidden relative z-10 ring-1 ring-slate-900/5">
       {/* Header */}
-      <div className="bg-gradient-to-r from-blue-700 to-blue-600 px-6 py-5 flex items-center gap-4 text-white shrink-0 shadow-sm relative z-20">
-        <div className="relative">
-          <div className="bg-white/20 p-2.5 rounded-full backdrop-blur-sm border border-white/10">
-            <Bot className="w-6 h-6" />
+      <div className={`bg-gradient-to-r ${currentHeaderColor} px-6 py-5 flex items-center justify-between text-white shrink-0 shadow-sm relative z-20`}>
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <div className="bg-white/20 p-2.5 rounded-full backdrop-blur-sm border border-white/10">
+              <AvatarIcon />
+            </div>
+            <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-400 border-2 border-blue-600 rounded-full"></span>
           </div>
-          <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-400 border-2 border-blue-600 rounded-full"></span>
+          <div>
+            <h3 className="font-bold text-lg leading-tight tracking-tight">{settings.name}</h3>
+            <p className="text-blue-100 text-sm font-medium flex items-center gap-1.5 mt-0.5 opacity-90">
+              Usually replies instantly
+            </p>
+          </div>
         </div>
-        <div>
-          <h3 className="font-bold text-lg leading-tight tracking-tight">PlumbBot AI</h3>
-          <p className="text-blue-100 text-sm font-medium flex items-center gap-1.5 mt-0.5 opacity-90">
-            Usually replies instantly
-          </p>
-        </div>
+        <button 
+          onClick={() => setShowSettings(!showSettings)}
+          className="p-2 hover:bg-white/10 rounded-full transition-colors"
+          title="Admin Settings"
+        >
+          <Settings className="w-5 h-5 opacity-80 hover:opacity-100" />
+        </button>
       </div>
       
+      {/* Settings Overlay */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute inset-0 z-30 bg-white p-6 overflow-y-auto"
+          >
+            <div className="flex justify-between items-center mb-6">
+              <h4 className="text-xl font-bold text-slate-900">Bot Settings</h4>
+              <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Bot Name</label>
+                <input 
+                  type="text" 
+                  value={settings.name}
+                  onChange={(e) => setSettings({...settings, name: e.target.value})}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Greeting Message</label>
+                <textarea 
+                  rows={2}
+                  value={settings.greeting}
+                  onChange={(e) => setSettings({...settings, greeting: e.target.value})}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Tone of Voice</label>
+                <select 
+                  value={settings.tone}
+                  onChange={(e) => setSettings({...settings, tone: e.target.value})}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none"
+                >
+                  <option value="professional and helpful">Professional & Helpful</option>
+                  <option value="friendly and casual">Friendly & Casual</option>
+                  <option value="urgent and direct">Urgent & Direct</option>
+                  <option value="humorous and witty">Humorous & Witty</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Avatar Style</label>
+                <div className="flex gap-3">
+                  {(['bot', 'user', 'smile'] as const).map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => setSettings({...settings, avatarType: type})}
+                      className={`flex-1 py-3 rounded-xl border-2 transition-all flex items-center justify-center ${
+                        settings.avatarType === type ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-100 text-slate-400 hover:border-slate-200'
+                      }`}
+                    >
+                      {type === 'bot' && <Bot className="w-5 h-5" />}
+                      {type === 'user' && <User className="w-5 h-5" />}
+                      {type === 'smile' && <Smile className="w-5 h-5" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Theme Color</label>
+                <div className="flex gap-3">
+                  {['blue', 'indigo', 'slate', 'emerald'].map((color) => (
+                    <button
+                      key={color}
+                      onClick={() => setSettings({...settings, primaryColor: color})}
+                      className={`w-10 h-10 rounded-full border-4 transition-all ${
+                        settings.primaryColor === color ? 'border-white ring-2 ring-slate-900' : 'border-transparent'
+                      } ${
+                        color === 'blue' ? 'bg-blue-600' : 
+                        color === 'indigo' ? 'bg-indigo-600' : 
+                        color === 'slate' ? 'bg-slate-700' : 'bg-emerald-600'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <button 
+                onClick={() => saveSettings(settings)}
+                className="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl hover:bg-slate-800 transition-all mt-4"
+              >
+                Save & Apply Changes
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 relative" style={{ backgroundImage: 'radial-gradient(#e2e8f0 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50 relative" 
+        style={{ backgroundImage: 'radial-gradient(#e2e8f0 1px, transparent 1px)', backgroundSize: '20px 20px' }}
+      >
         <AnimatePresence initial={false}>
           {messages.map((msg, idx) => (
             <motion.div
@@ -144,7 +374,7 @@ function ChatbotWidget() {
             >
               <div className={`max-w-[85%] rounded-2xl px-5 py-3.5 text-[15px] leading-relaxed shadow-sm ${
                 msg.role === 'user' 
-                  ? 'bg-blue-600 text-white rounded-br-sm' 
+                  ? `${currentButtonColor} text-white rounded-br-sm` 
                   : 'bg-white border border-slate-200/60 text-slate-800 rounded-bl-sm'
               }`}>
                 {msg.text}
@@ -178,30 +408,41 @@ function ChatbotWidget() {
             </motion.div>
           )}
         </AnimatePresence>
-        <div ref={messagesEndRef} />
       </div>
       
       {/* Input */}
       <div className="p-4 bg-white border-t border-slate-100 shrink-0 relative z-20">
         <form onSubmit={handleSend} className="flex items-center gap-3">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={isTyping}
-            placeholder="Type your message..."
-            className="flex-1 bg-white border-2 border-slate-200 hover:border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 rounded-full px-6 py-3.5 text-[15px] outline-none transition-all placeholder:text-slate-400 shadow-sm disabled:opacity-50 disabled:bg-slate-50"
-          />
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={isTyping}
+              placeholder={isListening ? "Listening..." : "Type your message..."}
+              className={`w-full bg-white border-2 border-slate-200 hover:border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 rounded-full pl-6 pr-12 py-3.5 text-[15px] outline-none transition-all placeholder:text-slate-400 shadow-sm disabled:opacity-50 disabled:bg-slate-50 ${isListening ? 'ring-2 ring-red-500/50 border-red-200' : ''}`}
+            />
+            <button
+              type="button"
+              onClick={toggleListening}
+              className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full transition-all ${
+                isListening ? 'text-red-500 bg-red-50 animate-pulse' : 'text-slate-400 hover:text-blue-600 hover:bg-slate-100'
+              }`}
+              title={isListening ? "Stop listening" : "Start voice input"}
+            >
+              <Mic className={`w-5 h-5 ${isListening ? 'fill-current' : ''}`} />
+            </button>
+          </div>
           <button
             type="submit"
             disabled={!input.trim() || isTyping}
-            className="bg-blue-600 text-white p-3.5 rounded-full hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg active:scale-95 flex-shrink-0"
+            className={`${currentButtonColor} text-white p-3.5 rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg active:scale-95 flex-shrink-0`}
           >
             <Send className="w-5 h-5 ml-0.5" />
           </button>
         </form>
         <div className="text-center mt-3">
-          <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Powered by PlumbBot AI</span>
+          <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Powered by {settings.name}</span>
         </div>
       </div>
     </div>
