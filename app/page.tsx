@@ -28,7 +28,6 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 // import { sendLeadEmail } from './actions'; // Removed for static export
 import { GoogleGenAI, Type as GenAIType } from "@google/genai";
-import Vapi from "@vapi-ai/web";
 
 // --- BOT CONFIGURATION ---
 interface BotSettings {
@@ -106,7 +105,7 @@ function ChatbotWidget() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const vapiRef = useRef<Vapi | null>(null);
+  const vapiRef = useRef<any>(null);
   const messagesRef = useRef(messages);
 
   useEffect(() => {
@@ -195,52 +194,54 @@ function ChatbotWidget() {
     // Initialize Vapi
     const vapiPublicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
     if (vapiPublicKey) {
-      vapiRef.current = new Vapi(vapiPublicKey);
-      
-      vapiRef.current.on('call-start', () => {
-        setIsCalling(true);
-        logVapiEvent('call-start', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
+      import('@vapi-ai/web').then(({ default: Vapi }) => {
+        vapiRef.current = new Vapi(vapiPublicKey);
         
-        // Send chat history as context to the Vapi assistant
-        const chatContext = messagesRef.current.map(m => `${m.role === 'bot' ? 'Assistant' : 'User'}: ${m.text}`).join('\n');
-        vapiRef.current?.send({
-          type: "add-message",
-          message: {
-            role: "system",
-            content: `The user just transitioned from a text chat to this voice call. Here is the text chat history so far:\n\n${chatContext}\n\nPlease use this context to seamlessly continue the conversation.`
-          }
+        vapiRef.current.on('call-start', () => {
+          setIsCalling(true);
+          logVapiEvent('call-start', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
+          
+          // Send chat history as context to the Vapi assistant
+          const chatContext = messagesRef.current.map(m => `${m.role === 'bot' ? 'Assistant' : 'User'}: ${m.text}`).join('\n');
+          vapiRef.current?.send({
+            type: "add-message",
+            message: {
+              role: "system",
+              content: `The user just transitioned from a text chat to this voice call. Here is the text chat history so far:\n\n${chatContext}\n\nPlease use this context to seamlessly continue the conversation.`
+            }
+          });
+
+          setMessages(prev => [...prev, { 
+            role: 'bot', 
+            text: "Voice call started. How can I help you?", 
+            time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+          }]);
         });
 
-        setMessages(prev => [...prev, { 
-          role: 'bot', 
-          text: "Voice call started. How can I help you?", 
-          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
-        }]);
-      });
+        vapiRef.current.on('call-end', () => {
+          setIsCalling(false);
+          logVapiEvent('call-end', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
+          setMessages(prev => [...prev, { 
+            role: 'bot', 
+            text: "Voice call ended.", 
+            time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+          }]);
+        });
 
-      vapiRef.current.on('call-end', () => {
-        setIsCalling(false);
-        logVapiEvent('call-end', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
-        setMessages(prev => [...prev, { 
-          role: 'bot', 
-          text: "Voice call ended.", 
-          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
-        }]);
-      });
+        vapiRef.current.on('error', (e: any) => {
+          console.error('Vapi error:', e);
+          logVapiEvent('error', { error: e, assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
+          setIsCalling(false);
+        });
 
-      vapiRef.current.on('error', (e) => {
-        console.error('Vapi error:', e);
-        logVapiEvent('error', { error: e, assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
-        setIsCalling(false);
-      });
+        vapiRef.current.on('speech-start', () => {
+          logVapiEvent('speech-start', { message: "Assistant started speaking" });
+        });
 
-      vapiRef.current.on('speech-start', () => {
-        logVapiEvent('speech-start', { message: "Assistant started speaking" });
-      });
-
-      vapiRef.current.on('speech-end', () => {
-        logVapiEvent('speech-end', { message: "Assistant stopped speaking" });
-      });
+        vapiRef.current.on('speech-end', () => {
+          logVapiEvent('speech-end', { message: "Assistant stopped speaking" });
+        });
+      }).catch(err => console.error("Failed to load Vapi", err));
     }
   }, []);
 
