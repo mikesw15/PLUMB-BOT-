@@ -22,11 +22,13 @@ import {
   Settings,
   User,
   Smile,
-  Type
+  AlertCircle,
+  Bell
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 // import { sendLeadEmail } from './actions'; // Removed for static export
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type as GenAIType } from "@google/genai";
+import Vapi from "@vapi-ai/web";
 
 // --- BOT CONFIGURATION ---
 interface BotSettings {
@@ -35,6 +37,7 @@ interface BotSettings {
   tone: string;
   avatarType: 'bot' | 'user' | 'smile';
   primaryColor: string;
+  vapiPhoneNumber?: string;
 }
 
 const DEFAULT_SETTINGS: BotSettings = {
@@ -42,19 +45,51 @@ const DEFAULT_SETTINGS: BotSettings = {
   greeting: "Hi! I'm PlumbBot AI. How can I help you today?",
   tone: "professional and helpful",
   avatarType: 'bot',
-  primaryColor: "blue"
+  primaryColor: "blue",
+  vapiPhoneNumber: ""
 };
 
 // --- KNOWLEDGE BASE ---
 // Paste your business information, FAQs, pricing, and service details here.
 // The AI will use this to answer customer questions accurately.
 const KNOWLEDGE_BASE = `
-PlumbBot AI is a professional plumbing service based in the UK.
-- Services: Boiler repair (£120+), leak fixing (£80+), blocked drains (£90+), emergency call-outs (24/7).
-- Areas Covered: All of London, Kent, and Surrey.
-- Pricing: Standard call-out fee is £80 (includes first hour).
-- Emergency: We aim to be on-site within 60 minutes for emergencies.
-- Goal: Your primary goal is to help customers with plumbing issues and eventually collect their POSTCODE and PHONE NUMBER so an engineer can call them back.
+PlumbBot AI is a professional plumbing service based in the UK, specializing in residential and commercial plumbing solutions.
+
+### SERVICES & PRICING
+- **Standard Call-Out**: £80 (includes the first hour of labor).
+- **Hourly Rate**: £60 per hour after the first hour (charged in 30-minute increments).
+- **Boiler Repair**: Starting from £120 + parts.
+- **Boiler Servicing**: Fixed price of £95 (recommended annually).
+- **Leak Fixing**: Starting from £80.
+- **Blocked Drains**: Starting from £90 (includes high-pressure jetting if required).
+- **Radiator Repairs**: Bleeding (£40), replacement (£120+), or fixing cold spots.
+- **Tap & Shower**: Tap replacement (£75+), shower valve repair (£110+), new shower installation (£250+).
+- **Toilet Repairs**: Fixing flushes, leaks, or unblocking (£85+).
+- **Power Flushing**: From £350 (improves heating efficiency).
+
+### EMERGENCY SERVICES
+- **Availability**: 24/7, 365 days a year.
+- **Response Time**: We aim to be on-site within 60 minutes for critical emergencies.
+- **Emergency Situations**: Burst pipes, major flooding, gas leaks (call 0800 111999 first), no heating/hot water in winter, sewage backups.
+- **Out-of-Hours Rate**: £120 call-out fee between 8 PM and 6 AM.
+
+### COMMON ISSUES & ADVICE
+- **Low Boiler Pressure**: Usually fixed by topping up the filling loop. If it drops frequently, there may be a leak.
+- **Cold Radiators**: Often need bleeding to remove trapped air. If only the bottom is warm, it may be sludge (requires power flush).
+- **Leaking Taps**: Usually a worn washer or ceramic disc.
+- **Noisy Pipes (Water Hammer)**: Often caused by loose pipework or high water pressure.
+- **Slow Drains**: Try a plunger or eco-friendly drain cleaner before calling us.
+
+### COMPANY POLICIES
+- **Guarantee**: 12-month guarantee on all parts we supply and all labor performed.
+- **Insurance**: Fully public liability insured up to £5 million.
+- **Certifications**: All heating engineers are Gas Safe Registered.
+- **Transparency**: No hidden fees. We provide a quote before starting any major work.
+- **Cancellations**: 24 hours' notice required for non-emergency bookings to avoid a £40 cancellation fee.
+- **Areas Covered**: All of London (Zones 1-6), Kent, and Surrey.
+
+### BOT GOAL
+Your primary goal is to help customers diagnose their issues and eventually collect their POSTCODE and PHONE NUMBER so a human engineer can call them back to book the job.
 `;
 
 function ChatbotWidget() {
@@ -66,8 +101,17 @@ function ChatbotWidget() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isEmergency, setIsEmergency] = useState(false);
+  const [isCalling, setIsCalling] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const vapiRef = useRef<Vapi | null>(null);
+  const messagesRef = useRef(messages);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Load settings from localStorage on mount
   useEffect(() => {
@@ -92,9 +136,6 @@ function ChatbotWidget() {
     setMessages([{ role: 'bot', text: newSettings.greeting, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }]);
   };
 
-  // Initialize Gemini AI
-  const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || "" });
-
   const scrollToBottom = () => {
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTo({
@@ -107,6 +148,21 @@ function ChatbotWidget() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isTyping]);
+
+  const logVapiEvent = async (event: string, metadata: any) => {
+    const timestamp = Date.now();
+    console.log(`[VAPI_CLIENT_LOG] ${new Date(timestamp).toISOString()} - ${event}`, metadata);
+    
+    try {
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event, metadata, timestamp })
+      });
+    } catch (e) {
+      console.error("Failed to send log to server", e);
+    }
+  };
 
   // Speech Recognition Setup
   useEffect(() => {
@@ -132,7 +188,129 @@ function ChatbotWidget() {
         setIsListening(false);
       };
     }
+
+    // Initialize audio for notifications
+    audioRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+
+    // Initialize Vapi
+    const vapiPublicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
+    if (vapiPublicKey) {
+      vapiRef.current = new Vapi(vapiPublicKey);
+      
+      vapiRef.current.on('call-start', () => {
+        setIsCalling(true);
+        logVapiEvent('call-start', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
+        
+        // Send chat history as context to the Vapi assistant
+        const chatContext = messagesRef.current.map(m => `${m.role === 'bot' ? 'Assistant' : 'User'}: ${m.text}`).join('\n');
+        vapiRef.current?.send({
+          type: "add-message",
+          message: {
+            role: "system",
+            content: `The user just transitioned from a text chat to this voice call. Here is the text chat history so far:\n\n${chatContext}\n\nPlease use this context to seamlessly continue the conversation.`
+          }
+        });
+
+        setMessages(prev => [...prev, { 
+          role: 'bot', 
+          text: "Voice call started. How can I help you?", 
+          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+        }]);
+      });
+
+      vapiRef.current.on('call-end', () => {
+        setIsCalling(false);
+        logVapiEvent('call-end', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
+        setMessages(prev => [...prev, { 
+          role: 'bot', 
+          text: "Voice call ended.", 
+          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+        }]);
+      });
+
+      vapiRef.current.on('error', (e) => {
+        console.error('Vapi error:', e);
+        logVapiEvent('error', { error: e, assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
+        setIsCalling(false);
+      });
+
+      vapiRef.current.on('speech-start', () => {
+        logVapiEvent('speech-start', { message: "Assistant started speaking" });
+      });
+
+      vapiRef.current.on('speech-end', () => {
+        logVapiEvent('speech-end', { message: "Assistant stopped speaking" });
+      });
+    }
   }, []);
+
+  const toggleCall = async () => {
+    if (!vapiRef.current) {
+      alert("Vapi is not configured. Please add NEXT_PUBLIC_VAPI_PUBLIC_KEY to your environment.");
+      return;
+    }
+
+    if (isCalling) {
+      vapiRef.current.stop();
+    } else {
+      const assistantId = process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
+      if (!assistantId) {
+        alert("Vapi Assistant ID is missing. Please add NEXT_PUBLIC_VAPI_ASSISTANT_ID to your environment.");
+        return;
+      }
+      try {
+        await vapiRef.current.start(assistantId);
+      } catch (e) {
+        console.error("Failed to start Vapi call", e);
+      }
+    }
+  };
+
+  const triggerOutboundCall = async (phoneNumber: string) => {
+    // Basic E.164 formatting for UK numbers
+    let formattedNumber = phoneNumber.replace(/\s+/g, '');
+    if (formattedNumber.startsWith('0')) {
+      formattedNumber = '+44' + formattedNumber.substring(1);
+    } else if (!formattedNumber.startsWith('+')) {
+      formattedNumber = '+' + formattedNumber;
+    }
+
+    logVapiEvent('outbound-call-trigger', { phoneNumber, formattedNumber });
+    try {
+      const chatContext = messagesRef.current.map(m => `${m.role === 'bot' ? 'Assistant' : 'User'}: ${m.text}`).join('\n');
+      
+      const response = await fetch('/api/vapi/outbound', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          phoneNumber: formattedNumber,
+          chatHistory: chatContext
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        logVapiEvent('outbound-call-success', { phoneNumber: formattedNumber, callId: data.call?.id });
+        setMessages(prev => [...prev, { 
+          role: 'bot', 
+          text: `Outbound call triggered to ${formattedNumber}.`, 
+          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+        }]);
+      } else {
+        const errorMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+        logVapiEvent('outbound-call-error', { phoneNumber: formattedNumber, error: data.error });
+        alert("Failed to trigger outbound call: " + errorMsg);
+      }
+    } catch (e) {
+      logVapiEvent('outbound-call-exception', { phoneNumber: formattedNumber, error: e });
+      console.error("Outbound call failed", e);
+    }
+  };
+
+  const playNotificationSound = () => {
+    if (audioRef.current) {
+      audioRef.current.play().catch(e => console.error("Audio play failed", e));
+    }
+  };
 
   const toggleListening = () => {
     if (!recognitionRef.current) {
@@ -164,6 +342,9 @@ function ChatbotWidget() {
     setIsTyping(true);
 
     try {
+      // Initialize Gemini AI
+      const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || "" });
+
       // Prepare conversation history for Gemini
       const history = messages.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'model',
@@ -185,15 +366,55 @@ function ChatbotWidget() {
             3. Always try to naturally guide the conversation toward getting their POSTCODE and PHONE NUMBER.
             4. If they provide a postcode, confirm we cover it.
             5. Once you have both postcode and phone number, tell them an engineer will call shortly.
+            6. Identify if the user's issue is an EMERGENCY (e.g., burst pipe, major leak, no heating in winter, flooding).
+            7. If it's an emergency, set isEmergency to true.
+            8. If you have captured BOTH postcode and phone number, set leadCaptured to true.
           `,
           temperature: 0.7,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: GenAIType.OBJECT,
+            properties: {
+              reply: { type: GenAIType.STRING, description: "The text response to the user" },
+              isEmergency: { type: GenAIType.BOOLEAN, description: "Whether the issue is an emergency" },
+              leadCaptured: { type: GenAIType.BOOLEAN, description: "Whether postcode and phone number were both captured in this turn or previously" },
+              postcode: { type: GenAIType.STRING, description: "The captured postcode if available" },
+              phone: { type: GenAIType.STRING, description: "The captured phone number if available" }
+            },
+            required: ["reply", "isEmergency", "leadCaptured"]
+          }
         },
       });
 
-      const botReply = response.text || "I'm sorry, I'm having a bit of trouble connecting. Please try again in a moment.";
+      const data = JSON.parse(response.text || "{}");
+      const botReply = data.reply || "I'm sorry, I'm having a bit of trouble connecting.";
       const botTime = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
       
-      setMessages(prev => [...prev, { role: 'bot', text: botReply, time: botTime }]);
+      if (data.isEmergency) {
+        setIsEmergency(true);
+      }
+
+      if (data.leadCaptured) {
+        playNotificationSound();
+        // Send server-side notification
+        fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            postcode: data.postcode || "Unknown",
+            phone: data.phone || "Unknown",
+            issue: userMsg,
+            isEmergency: data.isEmergency || isEmergency
+          })
+        }).catch(e => console.error("Notification failed", e));
+      }
+
+      setMessages(prev => [...prev, { 
+        role: 'bot', 
+        text: botReply, 
+        time: botTime,
+        capturedPhone: data.phone
+      }]);
     } catch (error) {
       console.error("Gemini AI Error:", error);
       setMessages(prev => [...prev, { 
@@ -244,18 +465,50 @@ function ChatbotWidget() {
           <div>
             <h3 className="font-bold text-lg leading-tight tracking-tight">{settings.name}</h3>
             <p className="text-blue-100 text-sm font-medium flex items-center gap-1.5 mt-0.5 opacity-90">
-              Usually replies instantly
+              {isCalling ? "On a voice call..." : (settings.vapiPhoneNumber ? `Call us: ${settings.vapiPhoneNumber}` : "Usually replies instantly")}
             </p>
           </div>
         </div>
-        <button 
-          onClick={() => setShowSettings(!showSettings)}
-          className="p-2 hover:bg-white/10 rounded-full transition-colors"
-          title="Admin Settings"
-        >
-          <Settings className="w-5 h-5 opacity-80 hover:opacity-100" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={toggleCall}
+            className={`p-2 rounded-full transition-all ${isCalling ? 'bg-red-500 text-white animate-pulse' : 'hover:bg-white/10 text-white'}`}
+            title={isCalling ? "End Voice Call" : "Start Voice Call"}
+          >
+            <PhoneCall className={`w-5 h-5 ${isCalling ? 'fill-current' : ''}`} />
+          </button>
+          <button 
+            onClick={() => setShowSettings(!showSettings)}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            title="Admin Settings"
+          >
+            <Settings className="w-5 h-5 opacity-80 hover:opacity-100" />
+          </button>
+        </div>
       </div>
+
+      {/* Emergency Banner */}
+      <AnimatePresence>
+        {isEmergency && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-red-600 text-white px-4 py-2 flex items-center justify-between text-xs font-bold uppercase tracking-wider relative z-10"
+          >
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 animate-pulse" />
+              <span>Emergency Priority Detected</span>
+            </div>
+            <button 
+              onClick={() => setIsEmergency(false)}
+              className="hover:bg-white/20 p-1 rounded"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
       
       {/* Settings Overlay */}
       <AnimatePresence>
@@ -328,6 +581,17 @@ function ChatbotWidget() {
               </div>
 
               <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Vapi Phone Number (Optional)</label>
+                <input 
+                  type="text" 
+                  value={settings.vapiPhoneNumber || ""} 
+                  onChange={(e) => setSettings({...settings, vapiPhoneNumber: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-slate-900"
+                  placeholder="+44 7700 900000"
+                />
+              </div>
+
+              <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">Theme Color</label>
                 <div className="flex gap-3">
                   {['blue', 'indigo', 'slate', 'emerald'].map((color) => (
@@ -378,6 +642,17 @@ function ChatbotWidget() {
                   : 'bg-white border border-slate-200/60 text-slate-800 rounded-bl-sm'
               }`}>
                 {msg.text}
+                {(msg as any).capturedPhone && (
+                  <div className="mt-3 pt-3 border-t border-slate-100">
+                    <button
+                      onClick={() => triggerOutboundCall((msg as any).capturedPhone)}
+                      className="flex items-center gap-2 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors"
+                    >
+                      <PhoneCall className="w-3 h-3" />
+                      Trigger AI Outbound Call to {(msg as any).capturedPhone}
+                    </button>
+                  </div>
+                )}
               </div>
               <span suppressHydrationWarning className="text-[11px] text-slate-400 mt-1.5 px-1 font-medium">{msg.time}</span>
             </motion.div>
@@ -386,25 +661,95 @@ function ChatbotWidget() {
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 5, transition: { duration: 0.3, ease: "easeIn" } }}
-              transition={{ duration: 0.5, delay: 0.4, ease: [0.23, 1, 0.32, 1] }}
-              className="flex justify-start"
+              exit={{ opacity: 0, scale: 0.95, y: 5, transition: { duration: 0.2 } }}
+              className="flex items-end gap-3 mb-6"
             >
-              <div className="bg-white border border-slate-200/60 rounded-2xl rounded-bl-sm px-5 py-4 shadow-sm flex items-center gap-1.5">
-                {[0, 1, 2].map((i) => (
-                  <motion.span
-                    key={i}
-                    className="w-1.5 h-1.5 bg-slate-400 rounded-full"
-                    animate={{ y: [0, -4, 0], opacity: [0.3, 1, 0.3] }}
-                    transition={{
-                      duration: 1,
-                      repeat: Infinity,
-                      delay: i * 0.2,
-                      ease: "easeInOut"
-                    }}
-                  />
-                ))}
-              </div>
+              <motion.div 
+                animate={{ 
+                  scale: [1, 1.05, 1],
+                  boxShadow: [
+                    "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
+                    "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+                    "0 1px 2px 0 rgba(0, 0, 0, 0.05)"
+                  ]
+                }}
+                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                className={`w-9 h-9 rounded-full flex items-center justify-center text-white shrink-0 shadow-sm relative overflow-hidden ${
+                  settings.primaryColor === 'blue' ? 'bg-blue-600' :
+                  settings.primaryColor === 'indigo' ? 'bg-indigo-600' :
+                  settings.primaryColor === 'slate' ? 'bg-slate-700' : 'bg-emerald-600'
+                }`}
+              >
+                <div className="scale-75 relative z-10">
+                  <AvatarIcon />
+                </div>
+                <motion.div 
+                  className="absolute inset-0 bg-white/20"
+                  animate={{ 
+                    x: ['-100%', '100%'],
+                  }}
+                  transition={{ 
+                    duration: 1.5, 
+                    repeat: Infinity, 
+                    ease: "linear" 
+                  }}
+                />
+              </motion.div>
+              <motion.div 
+                animate={{ 
+                  y: [0, -2, 0],
+                }}
+                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                className="bg-white border border-slate-200/60 rounded-2xl rounded-bl-sm px-6 py-4 shadow-md flex items-center gap-4 relative overflow-hidden group"
+              >
+                <div className="flex gap-2">
+                  {[0, 1, 2].map((i) => (
+                    <motion.span
+                      key={i}
+                      className={`w-2 h-2 rounded-full ${
+                        settings.primaryColor === 'blue' ? 'bg-blue-500' :
+                        settings.primaryColor === 'indigo' ? 'bg-indigo-500' :
+                        settings.primaryColor === 'slate' ? 'bg-slate-500' : 'bg-emerald-500'
+                      }`}
+                      animate={{ 
+                        y: [0, -6, 0],
+                        opacity: [0.3, 1, 0.3],
+                        scale: [1, 1.3, 1]
+                      }}
+                      transition={{
+                        duration: 1,
+                        repeat: Infinity,
+                        delay: i * 0.2,
+                        ease: "easeInOut"
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="flex flex-col">
+                  <motion.span 
+                    animate={{ opacity: [0.5, 1, 0.5] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                    className="text-[10px] font-black text-slate-400 uppercase tracking-[0.25em] select-none leading-none mb-0.5"
+                  >
+                    PlumbBot AI
+                  </motion.span>
+                  <span className="text-[11px] font-medium text-slate-500 italic">is thinking...</span>
+                </div>
+                
+                {/* Subtle shimmer effect on the bubble */}
+                <motion.div 
+                  className="absolute inset-0 bg-gradient-to-r from-transparent via-slate-50/50 to-transparent -skew-x-12"
+                  animate={{ 
+                    left: ['-100%', '200%'],
+                  }}
+                  transition={{ 
+                    duration: 2.5, 
+                    repeat: Infinity, 
+                    ease: "easeInOut",
+                    delay: 0.5
+                  }}
+                />
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -456,15 +801,31 @@ function LeadForm() {
     e.preventDefault();
     setStatus('submitting');
     
-    // For static hosting (like GitHub Pages), you cannot use Server Actions.
-    // To get real email submissions, you can use a service like Formspree:
-    // 1. Change the form tag to: <form action="https://formspree.io/f/your-id" method="POST">
-    // 2. Or use a client-side fetch to your own API endpoint.
-    
-    // Simulating a successful submission for the demo
-    setTimeout(() => {
-      setStatus('success');
-    }, 1500);
+    const formData = new FormData(e.currentTarget as HTMLFormElement);
+    const data = Object.fromEntries(formData.entries());
+
+    try {
+      const response = await fetch('https://formspree.io/f/xrelpkod', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      });
+
+      if (response.ok) {
+        setStatus('success');
+      } else {
+        const errorData = await response.json();
+        alert(errorData.errors ? errorData.errors.map((e: any) => e.message).join(', ') : "Submission failed");
+        setStatus('idle');
+      }
+    } catch (error) {
+      console.error("Formspree error:", error);
+      alert("An error occurred. Please try again.");
+      setStatus('idle');
+    }
   };
 
   if (status === 'success') {
