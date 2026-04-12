@@ -26,6 +26,7 @@ import {
   Bell
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import Image from 'next/image';
 // import { sendLeadEmail } from './actions'; // Removed for static export
 import { GoogleGenAI, Type as GenAIType } from "@google/genai";
 
@@ -457,6 +458,15 @@ function ChatbotWidget() {
       {/* Header */}
       <div className={`bg-gradient-to-r ${currentHeaderColor} px-6 py-5 flex items-center justify-between text-white shrink-0 shadow-sm relative z-20`}>
         <div className="flex items-center gap-4">
+          <div className="relative w-10 h-10 overflow-hidden rounded-full border border-white/20 bg-white">
+            <Image 
+              src="https://plumbbot.co.uk/images/logo1.png" 
+              alt="PlumbBot Logo" 
+              fill 
+              className="object-contain p-1"
+              referrerPolicy="no-referrer"
+            />
+          </div>
           <div className="relative">
             <div className="bg-white/20 p-2.5 rounded-full backdrop-blur-sm border border-white/10">
               <AvatarIcon />
