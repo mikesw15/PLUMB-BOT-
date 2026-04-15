@@ -103,6 +103,7 @@ function ChatbotWidget() {
   const [isListening, setIsListening] = useState(false);
   const [isEmergency, setIsEmergency] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
+  const [isTestingCall, setIsTestingCall] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -268,7 +269,7 @@ function ChatbotWidget() {
     }
   };
 
-  const triggerOutboundCall = async (phoneNumber: string) => {
+  const triggerOutboundCall = async (phoneNumber: string, isTest: boolean = false) => {
     // Basic E.164 formatting for UK numbers
     let formattedNumber = phoneNumber.replace(/\s+/g, '');
     if (formattedNumber.startsWith('0')) {
@@ -277,9 +278,13 @@ function ChatbotWidget() {
       formattedNumber = '+' + formattedNumber;
     }
 
-    logVapiEvent('outbound-call-trigger', { phoneNumber, formattedNumber });
+    if (isTest) setIsTestingCall(true);
+    logVapiEvent(isTest ? 'test-call-trigger' : 'outbound-call-trigger', { phoneNumber, formattedNumber });
+    
     try {
-      const chatContext = messagesRef.current.map(m => `${m.role === 'bot' ? 'Assistant' : 'User'}: ${m.text}`).join('\n');
+      const chatContext = isTest 
+        ? "This is a test call to verify the Vapi integration. Please just say hello and confirm you can hear me."
+        : messagesRef.current.map(m => `${m.role === 'bot' ? 'Assistant' : 'User'}: ${m.text}`).join('\n');
       
       const response = await fetch('/api/vapi/outbound', {
         method: 'POST',
@@ -291,20 +296,27 @@ function ChatbotWidget() {
       });
       const data = await response.json();
       if (data.success) {
-        logVapiEvent('outbound-call-success', { phoneNumber: formattedNumber, callId: data.call?.id });
-        setMessages(prev => [...prev, { 
-          role: 'bot', 
-          text: `Outbound call triggered to ${formattedNumber}.`, 
-          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
-        }]);
+        logVapiEvent(isTest ? 'test-call-success' : 'outbound-call-success', { phoneNumber: formattedNumber, callId: data.call?.id });
+        if (!isTest) {
+          setMessages(prev => [...prev, { 
+            role: 'bot', 
+            text: `Outbound call triggered to ${formattedNumber}.`, 
+            time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+          }]);
+        } else {
+          alert("Test call triggered successfully! You should receive a call shortly.");
+        }
       } else {
         const errorMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
-        logVapiEvent('outbound-call-error', { phoneNumber: formattedNumber, error: data.error });
-        alert("Failed to trigger outbound call: " + errorMsg);
+        logVapiEvent(isTest ? 'test-call-error' : 'outbound-call-error', { phoneNumber: formattedNumber, error: data.error });
+        alert("Failed to trigger call: " + errorMsg);
       }
     } catch (e) {
-      logVapiEvent('outbound-call-exception', { phoneNumber: formattedNumber, error: e });
-      console.error("Outbound call failed", e);
+      logVapiEvent(isTest ? 'test-call-exception' : 'outbound-call-exception', { phoneNumber: formattedNumber, error: e });
+      console.error("Call failed", e);
+      alert("An error occurred while triggering the call.");
+    } finally {
+      if (isTest) setIsTestingCall(false);
     }
   };
 
@@ -593,13 +605,31 @@ function ChatbotWidget() {
 
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">Vapi Phone Number (Optional)</label>
-                <input 
-                  type="text" 
-                  value={settings.vapiPhoneNumber || ""} 
-                  onChange={(e) => setSettings({...settings, vapiPhoneNumber: e.target.value})}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-slate-900"
-                  placeholder="+44 7700 900000"
-                />
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={settings.vapiPhoneNumber || ""} 
+                    onChange={(e) => setSettings({...settings, vapiPhoneNumber: e.target.value})}
+                    className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all text-slate-900"
+                    placeholder="+44 7700 900000"
+                  />
+                  <button
+                    type="button"
+                    disabled={!settings.vapiPhoneNumber || isTestingCall}
+                    onClick={() => triggerOutboundCall(settings.vapiPhoneNumber!, true)}
+                    className="px-4 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
+                  >
+                    {isTestingCall ? (
+                      <Activity className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <PhoneCall className="w-4 h-4" />
+                    )}
+                    Test Call
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1.5 px-1">
+                  Enter your number in E.164 format (e.g. +447700900000) to test the AI voice agent.
+                </p>
               </div>
 
               <div>
