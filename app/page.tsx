@@ -365,14 +365,22 @@ function ChatbotWidget() {
         parts: [{ text: msg.text }]
       }));
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [...history, { role: 'user', parts: [{ text: userMsg }] }],
-        config: {
-          systemInstruction: `
-            You are ${settings.name}, a ${settings.tone} plumbing assistant.
-            Use the following knowledge base to answer questions:
-            ${KNOWLEDGE_BASE}
+      import { GoogleGenerativeAI } from "@google/generative-ai";
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!); // put your key in .env
+
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.5-flash",           // or "gemini-3-flash-preview" if still available
+  systemInstruction: `
+    You are ${settings.name}, a ${settings.tone} plumbing assistant.
+    Use the following knowledge base to answer questions:
+    ${KNOWLEDGE_BASE}
+  `,
+});
+
+const response = await model.generateContent({
+  contents: [...history, { role: "user", parts: [{ text: userMsg }] }],
+});
             
             Guidelines:
             1. Be concise and friendly.
