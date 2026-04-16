@@ -105,6 +105,7 @@ function ChatbotWidget() {
   const [isListening, setIsListening] = useState(false);
   const [isEmergency, setIsEmergency] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
+  const [callStatus, setCallStatus] = useState<'idle' | 'connecting' | 'active' | 'error'>('idle');
   const [isTestingCall, setIsTestingCall] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -203,6 +204,7 @@ function ChatbotWidget() {
         
         vapiRef.current.on('call-start', () => {
           setIsCalling(true);
+          setCallStatus('active');
           logVapiEvent('call-start', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
           
           // Send chat history as context to the Vapi assistant
@@ -224,6 +226,7 @@ function ChatbotWidget() {
 
         vapiRef.current.on('call-end', () => {
           setIsCalling(false);
+          setCallStatus('idle');
           logVapiEvent('call-end', { assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
           setMessages(prev => [...prev, { 
             role: 'bot', 
@@ -236,6 +239,7 @@ function ChatbotWidget() {
           console.error('Vapi error:', e);
           logVapiEvent('error', { error: e, assistantId: process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID });
           setIsCalling(false);
+          setCallStatus('error');
         });
 
         vapiRef.current.on('speech-start', () => {
@@ -258,6 +262,7 @@ function ChatbotWidget() {
     if (isCalling) {
       vapiRef.current.stop();
     } else {
+      setCallStatus('connecting');
       const assistantId = process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
       if (!assistantId) {
         alert("Vapi Assistant ID is missing. Please add NEXT_PUBLIC_VAPI_ASSISTANT_ID to your environment.");
@@ -492,14 +497,22 @@ function ChatbotWidget() {
           <div>
             <h3 className="font-bold text-lg leading-tight tracking-tight">{settings.name}</h3>
             <p className="text-blue-100 text-sm font-medium flex items-center gap-1.5 mt-0.5 opacity-90">
-              {isCalling ? "On a voice call..." : (settings.vapiPhoneNumber ? `Call us: ${settings.vapiPhoneNumber}` : "Usually replies instantly")}
+              {callStatus === 'active' ? "System active • Speaking..." : 
+               callStatus === 'connecting' ? "Securing connection..." :
+               callStatus === 'error' ? "Connection failed" :
+               (settings.vapiPhoneNumber ? `Call us: ${settings.vapiPhoneNumber}` : "Usually replies instantly")}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button 
             onClick={toggleCall}
-            className={`p-2 rounded-full transition-all ${isCalling ? 'bg-red-500 text-white animate-pulse' : 'hover:bg-white/10 text-white'}`}
+            className={`p-2 rounded-full transition-all ${
+              callStatus === 'active' ? 'bg-red-500 text-white animate-pulse' : 
+              callStatus === 'connecting' ? 'bg-amber-400 text-slate-900 animate-bounce' :
+              callStatus === 'error' ? 'bg-red-100 text-red-600' :
+              'hover:bg-white/10 text-white'
+            }`}
             title={isCalling ? "End Voice Call" : "Start Voice Call"}
           >
             <PhoneCall className={`w-5 h-5 ${isCalling ? 'fill-current' : ''}`} />
