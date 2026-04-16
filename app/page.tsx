@@ -37,6 +37,7 @@ interface BotSettings {
   tone: string;
   avatarType: 'bot' | 'user' | 'smile';
   primaryColor: string;
+  model: string;
   vapiPhoneNumber?: string;
 }
 
@@ -46,6 +47,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   tone: "professional and helpful",
   avatarType: 'bot',
   primaryColor: "blue",
+  model: "gemini-3-flash-preview",
   vapiPhoneNumber: ""
 };
 
@@ -365,22 +367,16 @@ function ChatbotWidget() {
         parts: [{ text: msg.text }]
       }));
 
-      import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!); // put your key in .env
-
-const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash",           // or "gemini-3-flash-preview" if still available
-  systemInstruction: `
-    You are ${settings.name}, a ${settings.tone} plumbing assistant.
-    Use the following knowledge base to answer questions:
-    ${KNOWLEDGE_BASE}
-  `,
-});
-
-const response = await model.generateContent({
-  contents: [...history, { role: "user", parts: [{ text: userMsg }] }],
-});
+      // Use the model selected in settings. 
+      // To change the default, update DEFAULT_SETTINGS or use the Admin Settings UI.
+      const response = await ai.models.generateContent({
+        model: settings.model || "gemini-3-flash-preview", 
+        contents: [...history, { role: 'user', parts: [{ text: userMsg }] }],
+        config: {
+          systemInstruction: `
+            You are ${settings.name}, a ${settings.tone} plumbing assistant.
+            Use the following knowledge base to answer questions:
+            ${KNOWLEDGE_BASE}
             
             Guidelines:
             1. Be concise and friendly.
@@ -566,6 +562,20 @@ const response = await model.generateContent({
                   onChange={(e) => setSettings({...settings, name: e.target.value})}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">AI Intelligence Model</label>
+                <select 
+                  value={settings.model}
+                  onChange={(e) => setSettings({...settings, model: e.target.value})}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none"
+                >
+                  <option value="gemini-3-flash-preview">Gemini 3 Flash (Fastest)</option>
+                  <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Most Accurate)</option>
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                </select>
+                <p className="mt-1.5 text-[10px] text-slate-500 font-medium">Flash is faster for chat. Pro is better for complex troubleshooting.</p>
               </div>
 
               <div>
