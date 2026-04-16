@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "npx next dev",
+    "build": "npx next build",
     "start": "node server.ts",
-    "lint": "eslint .",
-    "clean": "next clean"
+    "lint": "npx eslint .",
+    "clean": "npx next clean"
   },
   "dependencies": {
     "@google/genai": "^1.48.0",
